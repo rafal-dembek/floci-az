@@ -115,8 +115,12 @@ public class BannerLogger {
             sb.append(serviceStatusDocker("eventhub", true, amqpInfo));
         }
         if (config.services().serviceBus().enabled()) {
-            String amqpInfo = "amqp:" + config.services().serviceBus().amqpPort()
-                    + "  (on-demand)  storage:" + getStorageMode("servicebus");
+            EmulatorConfig.ServiceBusExternalBrokerConfig externalBroker =
+                    config.services().serviceBus().externalBroker();
+            String amqpInfo = externalBroker.host()
+                    .map(host -> "broker:" + host + ":" + externalBroker.amqpPort())
+                    .orElse("amqp:" + config.services().serviceBus().amqpPort() + "  (on-demand)")
+                    + "  storage:" + getStorageMode("servicebus");
             sb.append(serviceStatusDocker("servicebus", true, amqpInfo));
         }
         if (config.services().aks().enabled()) {

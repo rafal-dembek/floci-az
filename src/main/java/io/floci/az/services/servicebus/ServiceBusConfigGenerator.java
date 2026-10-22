@@ -23,6 +23,12 @@ public class ServiceBusConfigGenerator {
     private static final String CBS_ADDRESS = "$cbs";
     /** The queue the CBS responder reads the requests from. */
     private static final String CBS_INTERCEPT_ADDRESS = "$cbs-intercept";
+    /**
+     * The broker name of an external broker, whichever namespace it serves. It keeps the prefix
+     * {@link #brokerName} gives every namespace's broker, which the broker's AMQP layer recognises
+     * a Service Bus broker by.
+     */
+    static final String EXTERNAL_BROKER_NAME = brokerName("external");
 
     private final EmulatorConfig config;
 
@@ -31,20 +37,38 @@ public class ServiceBusConfigGenerator {
         this.config = config;
     }
 
+    /** The broker name floci-az gives the Artemis container it starts for a namespace. */
+    static String brokerName(String namespaceName) {
+        return "floci-az-servicebus-" + namespaceName;
+    }
+
     public String generate(String namespaceName) {
+        return generate(brokerName(namespaceName), true);
+    }
+
+    /**
+     * The broker.xml of a broker floci-az does not start. It has no AMQPS acceptor, since floci-az
+     * generates the TLS keystore only for a container of its own.
+     */
+    public String generateExternal() {
+        return generate(EXTERNAL_BROKER_NAME, false);
+    }
+
+    private String generate(String brokerName, boolean tls) {
         int maxDelivery = config.services().serviceBus().maxDeliveryCount();
         XmlBuilder xml = new XmlBuilder()
             .start("configuration", "urn:activemq")
               .start("core", "urn:activemq:core")
-                .elem("name", "floci-az-servicebus-" + namespaceName)
+                .elem("name", brokerName)
                 .elem("security-enabled", false)
                 .start("acceptors")
                   .startAttr("acceptor", "name", "amqp")
                     .raw("tcp://0.0.0.0:" + AMQP_INTERNAL_PORT
                         + "?protocols=AMQP;anycastPrefix=/"
                         + ";saslMechanisms=MSSBCBS,ANONYMOUS,PLAIN")
-                  .end("acceptor")
-                  .startAttr("acceptor", "name", "amqps")
+                  .end("acceptor");
+        if (tls) {
+            xml.startAttr("acceptor", "name", "amqps")
                     .raw("tcp://0.0.0.0:" + AMQPS_INTERNAL_PORT + "?protocols=AMQP"
                         + ";anycastPrefix=/"
                         + ";sslEnabled=true"
@@ -53,8 +77,9 @@ public class ServiceBusConfigGenerator {
                         + ";keyStoreType=PKCS12"
                         + ";needClientAuth=false"
                         + ";saslMechanisms=MSSBCBS,ANONYMOUS,PLAIN")
-                  .end("acceptor")
-                .end("acceptors")
+                .end("acceptor");
+        }
+        xml.end("acceptors")
                 .start("broker-plugins")
                   .startAttr("broker-plugin", "class-name",
                           "io.floci.az.artemis.ServiceBusDuplicateDetectionPlugin")

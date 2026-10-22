@@ -95,7 +95,7 @@ class ServiceBusNamespaceManagerTest {
     @Test
     void queueMBeanTargetsAnycastAddressAndQueue() {
         String mbean = ServiceBusNamespaceManager.queueMBean(
-                "default", "orders/Subscriptions/processor");
+                ServiceBusConfigGenerator.brokerName("default"), "orders/Subscriptions/processor");
 
         assertTrue(mbean.contains("broker=\"floci-az-servicebus-default\""));
         assertTrue(mbean.contains("address=\"orders/Subscriptions/processor\""));

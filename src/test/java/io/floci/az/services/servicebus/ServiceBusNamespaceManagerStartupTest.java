@@ -39,6 +39,8 @@ class ServiceBusNamespaceManagerStartupTest {
 
         when(config.services()).thenReturn(services);
         when(services.serviceBus()).thenReturn(serviceBus);
+        when(serviceBus.externalBroker()).thenReturn(
+                mock(EmulatorConfig.ServiceBusExternalBrokerConfig.class));
         when(services.dockerNetwork()).thenReturn(Optional.empty());
         when(serviceBus.artemisImage()).thenReturn("artemis");
         when(configGenerator.generate("failed")).thenReturn("<configuration/>");
@@ -76,6 +78,12 @@ class ServiceBusNamespaceManagerStartupTest {
     @Test
     void cleanedPreStartFailureReportsPortsReleased() throws Exception {
         EmulatorConfig config = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig services = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServiceBusConfig serviceBus = mock(EmulatorConfig.ServiceBusConfig.class);
+        when(config.services()).thenReturn(services);
+        when(services.serviceBus()).thenReturn(serviceBus);
+        when(serviceBus.externalBroker()).thenReturn(
+                mock(EmulatorConfig.ServiceBusExternalBrokerConfig.class));
         ContainerLifecycleManager lifecycleManager = mock(ContainerLifecycleManager.class);
         ArtemisTlsGenerator tlsGenerator = mock(ArtemisTlsGenerator.class);
         String containerName = "floci-az-servicebus-failed";
@@ -109,6 +117,8 @@ class ServiceBusNamespaceManagerStartupTest {
 
         when(config.services()).thenReturn(services);
         when(services.serviceBus()).thenReturn(serviceBus);
+        when(serviceBus.externalBroker()).thenReturn(
+                mock(EmulatorConfig.ServiceBusExternalBrokerConfig.class));
         when(services.dockerNetwork()).thenReturn(Optional.empty());
         when(serviceBus.artemisImage()).thenReturn("artemis");
         when(configGenerator.generate("failed")).thenReturn("<configuration/>");
@@ -152,6 +162,8 @@ class ServiceBusNamespaceManagerStartupTest {
 
         when(config.services()).thenReturn(services);
         when(services.serviceBus()).thenReturn(serviceBus);
+        when(serviceBus.externalBroker()).thenReturn(
+                mock(EmulatorConfig.ServiceBusExternalBrokerConfig.class));
         when(services.dockerNetwork()).thenReturn(Optional.empty());
         when(serviceBus.artemisImage()).thenReturn("artemis");
         when(configGenerator.generate("failed")).thenReturn("<configuration/>");

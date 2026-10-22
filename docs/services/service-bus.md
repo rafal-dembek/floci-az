@@ -172,6 +172,82 @@ This is what hosting integrations (e.g. .NET Aspire) should rely on: pass
 `FLOCI_AZ_SERVICES_SERVICE_BUS_AMQP_PORT` (with `..._MOCKED=false` and `..._START_ON_BOOT=true`),
 then hand clients `Endpoint=sb://<host>:<that port>;...;UseDevelopmentEmulator=true;`.
 
+## External broker
+
+Where floci-az has no Docker daemon to start Artemis with (Kubernetes, Compose without the Docker
+socket, rootless Podman), it can run Service Bus on an Artemis broker it does not start. Set
+`mocked: false` and `external-broker.host`. floci-az then starts, reaps and stops no container, and
+reaches the broker:
+
+- over AMQP (`external-broker.amqp-port`, default `5672`) for the CBS responder that answers the
+  SDKs' `put-token` requests;
+- over Jolokia (`external-broker.jolokia-port`, default `8161`) for entities and message counts, as
+  the broker's web console user (`external-broker.user` and `external-broker.password`, default
+  `artemis`/`artemis`, the `apache/activemq-artemis` image's defaults).
+
+Clients connect to the broker's host and AMQP port. The broker serves:
+
+- **One namespace**, since its addresses carry no namespace name: the first that starts, from the
+  topology file, `start-on-boot` or the management API. Starting a second fails, and `/health`
+  reports it when floci-az was configured to start it.
+- **Plain AMQP only**: floci-az generates TLS material only for a broker of its own, so clients use
+  `UseDevelopmentEmulator=true`.
+
+floci-az waits up to 60 seconds for the broker's AMQP port when the namespace starts, so start the
+broker first. `/ready` answers `200` once the namespace runs on the broker and the topology file is
+applied. floci-az does not watch the broker afterwards: if it restarts without its journal, restart
+floci-az to create the entities again.
+
+The broker needs floci-az's configuration, its Artemis extension and the Artemis AMQP and Proton-J
+jars floci-az patches. With `external-broker.export-dir` set, floci-az writes them there and exits
+instead of serving:
+
+| File | Where the broker needs it |
+|---|---|
+| `etc/broker.xml`, `etc/management.xml` | The broker instance's `etc/`, or `/var/lib/artemis-instance/etc-override/` for the official image's entrypoint to copy there |
+| `lib/floci-az-servicebus-extension.jar` | The broker instance's `lib/` |
+| `lib/proton-j-0.34.1.jar`, `lib/artemis-amqp-protocol-2.44.0.jar` | In place of the same jars in `/opt/activemq-artemis/lib/`: Artemis loads its own `lib/` before the instance's |
+
+The patched jars are built for the Artemis version of `artemis-image`, so run that version. In
+Compose (volume subpaths need Docker Engine 26 or later):
+
+```yaml
+services:
+  servicebus-files:
+    image: floci/floci-az:latest
+    environment:
+      FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_EXPORT_DIR: /app/data
+    volumes:
+      - servicebus-files:/app/data
+  servicebus:
+    image: apache/activemq-artemis:2.44.0
+    tmpfs:
+      # A new instance at every start; floci-az creates its entities again.
+      - /var/lib/artemis-instance:uid=1001,gid=1001,exec
+    volumes:
+      - {type: volume, source: servicebus-files, target: /var/lib/artemis-instance/etc-override, volume: {subpath: etc}}
+      - {type: volume, source: servicebus-files, target: /var/lib/artemis-instance/lib/floci-az-servicebus-extension.jar, volume: {subpath: lib/floci-az-servicebus-extension.jar}}
+      - {type: volume, source: servicebus-files, target: /opt/activemq-artemis/lib/proton-j-0.34.1.jar, volume: {subpath: lib/proton-j-0.34.1.jar}}
+      - {type: volume, source: servicebus-files, target: /opt/activemq-artemis/lib/artemis-amqp-protocol-2.44.0.jar, volume: {subpath: lib/artemis-amqp-protocol-2.44.0.jar}}
+    depends_on:
+      servicebus-files: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --output, /dev/null, --user, "artemis:artemis", "http://127.0.0.1:8161/console/jolokia/"]
+  floci-az:
+    image: floci/floci-az:latest
+    ports:
+      - "4577:4577"
+    environment:
+      FLOCI_AZ_SERVICES_SERVICE_BUS_MOCKED: "false"
+      FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_HOST: servicebus
+    depends_on:
+      servicebus: {condition: service_healthy}
+volumes:
+  servicebus-files:
+```
+
+Clients on the Compose network then use `Endpoint=sb://servicebus;...;UseDevelopmentEmulator=true;`.
+
 ## Python SDK
 
 ```python
@@ -240,6 +316,12 @@ services:
 | `FLOCI_AZ_SERVICES_SERVICE_BUS_ARTEMIS_IMAGE` | `apache/activemq-artemis:2.44.0` | Artemis image; must match bundled protocol patches |
 | `FLOCI_AZ_SERVICES_SERVICE_BUS_MAX_DELIVERY_COUNT` | `10` | Default max delivery attempts before dead-lettering, for entities that do not set `MaxDeliveryCount` |
 | `FLOCI_AZ_SERVICES_SERVICE_BUS_LOCK_DURATION_SECONDS` | `60` | Default peek-lock duration, for entities that do not set `LockDuration` |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_HOST` | *(unset)* | Host of an [external broker](#external-broker); when set, no Artemis container is started |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_AMQP_PORT` | `5672` | The external broker's AMQP port |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_JOLOKIA_PORT` | `8161` | The external broker's web console port, for Jolokia |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_USER` | `artemis` | The external broker's web console user |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_PASSWORD` | `artemis` | That user's password |
+| `FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_EXPORT_DIR` | *(unset)* | Write the external broker's files to this directory at startup, then exit |
 
 ### application.yml
 
@@ -255,6 +337,13 @@ floci-az:
       artemis-image: "apache/activemq-artemis:2.44.0"
       max-delivery-count: 10      # default when the entity omits MaxDeliveryCount
       lock-duration-seconds: 60   # default when the entity omits LockDuration
+      external-broker:            # an Artemis broker floci-az does not start; see External broker
+        # host: servicebus
+        amqp-port: 5672
+        jolokia-port: 8161
+        user: artemis
+        password: artemis
+        # export-dir: /broker     # write the broker's files there and exit
 ```
 
 ### Per-entity delivery settings

@@ -268,6 +268,14 @@ floci-az:
       artemis-image: "apache/activemq-artemis:2.44.0"
       max-delivery-count: 10
       lock-duration-seconds: 60
+      # An Artemis broker floci-az does not start (no Docker daemon needed); it serves one namespace.
+      # external-broker:
+      #   host: servicebus            # FLOCI_AZ_SERVICES_SERVICE_BUS_EXTERNAL_BROKER_HOST; with mocked: false
+      #   amqp-port: 5672
+      #   jolokia-port: 8161
+      #   user: artemis               # the broker's web console user, for Jolokia
+      #   password: artemis
+      #   export-dir: /broker         # write the broker's files there at startup and exit
     monitor:
       enabled: true
     aks:

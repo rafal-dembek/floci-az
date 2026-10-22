@@ -26,6 +26,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -36,7 +38,8 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Manages one Artemis container per Service Bus namespace.
+ * Manages one Artemis container per Service Bus namespace, or one namespace on an external
+ * broker that floci-az does not start ({@code external-broker.host}).
  * Entity topology (queues, topics, subscriptions) is provisioned dynamically
  * via Jolokia when the management API creates entities — unlike Event Hubs,
  * which pre-configures topology in broker.xml.
@@ -163,6 +166,10 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
         if (existing != null) {
             return existing;
         }
+        EmulatorConfig.ServiceBusExternalBrokerConfig externalBroker = externalBroker();
+        if (externalBroker.host().isPresent()) {
+            return startOnExternalBroker(namespaceName, externalBroker);
+        }
         String containerName = containerName(namespaceName);
 
         LOG.infov("Starting Artemis broker for Service Bus namespace ''{0}'' (plain:{1}, TLS:{2})",
@@ -262,6 +269,54 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
             }
             throw new NamespaceStartException(namespaceName, portsReleased, e);
         }
+    }
+
+    /**
+     * Starts a namespace on a broker floci-az did not start: no container, no TLS, only the CBS
+     * responder on its AMQP port. The broker's addresses carry no namespace, so it serves one.
+     */
+    private NamespaceState startOnExternalBroker(
+            String namespaceName, EmulatorConfig.ServiceBusExternalBrokerConfig broker) {
+        EndpointInfo amqpEndpoint = new EndpointInfo(broker.host().orElseThrow(), broker.amqpPort());
+        LOG.infov("Starting Service Bus namespace ''{0}'' on the external Artemis broker at {1}",
+                namespaceName, amqpEndpoint);
+        try {
+            if (!namespaces.isEmpty()) {
+                throw new IllegalStateException("The external Artemis broker already serves namespace '"
+                        + namespaces.keys().nextElement() + "'");
+            }
+            waitForPort(amqpEndpoint, "AMQP");
+        } catch (RuntimeException e) {
+            throw new NamespaceStartException(namespaceName, true, e);
+        }
+        ServiceBusCbsResponder cbs = new ServiceBusCbsResponder(amqpEndpoint.host(), amqpEndpoint.port());
+        cbs.start();
+        cbsResponders.put(namespaceName, cbs);
+        NamespaceState state = new NamespaceState(
+                null, amqpEndpoint.port(), 0, "", amqpEndpoint.host(), broker.jolokiaPort(), false);
+        register(namespaceName, state);
+        LOG.infov("Service Bus namespace ''{0}'' ready on the external broker: amqp:{1}",
+                namespaceName, amqpEndpoint);
+        return state;
+    }
+
+    /**
+     * Writes the files an external broker needs, as floci-az copies them into a broker of its own:
+     * {@code etc/broker.xml} and {@code etc/management.xml}, and under {@code lib/} the extension jar
+     * and the patched jars, named as the Artemis jars they replace.
+     */
+    public void exportBrokerFiles(Path dir) throws IOException {
+        Path etc = Files.createDirectories(dir.resolve("etc"));
+        Path lib = Files.createDirectories(dir.resolve("lib"));
+        Files.writeString(etc.resolve("broker.xml"), configGenerator.generateExternal());
+        Files.writeString(etc.resolve("management.xml"), MANAGEMENT_XML);
+        Files.write(lib.resolve(fileName(ARTEMIS_EXTENSION_PATH)), loadArtemisExtension());
+        Files.write(lib.resolve(fileName(PROTON_J_PATH)), loadResource(PROTON_PATCH_RESOURCE));
+        Files.write(lib.resolve(fileName(ARTEMIS_AMQP_PATH)), loadResource(ARTEMIS_AMQP_PATCH_RESOURCE));
+    }
+
+    private static String fileName(String path) {
+        return Path.of(path).getFileName().toString();
     }
 
     static final class NamespaceStartException extends RuntimeException {
@@ -390,12 +445,11 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
 
         String baseUrl = "http://" + state.jolokiaHost() + ":" + state.jolokiaPort()
                 + "/console/jolokia";
-        String auth = Base64.getEncoder().encodeToString(
-                "artemis:artemis".getBytes(StandardCharsets.UTF_8));
+        String auth = jolokiaAuth();
         HttpClient http = HttpClient.newHttpClient();
         try {
             return jolokiaReadMessageCounts(
-                    http, baseUrl, auth, namespaceName, queueNames);
+                    http, baseUrl, auth, brokerName(namespaceName), queueNames);
         } catch (Exception e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
@@ -689,6 +743,25 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
         return ContainerStorageHelper.dockerName(config, "servicebus-" + namespaceName);
     }
 
+    private EmulatorConfig.ServiceBusExternalBrokerConfig externalBroker() {
+        return config.services().serviceBus().externalBroker();
+    }
+
+    private String brokerName(String namespaceName) {
+        return externalBroker().host().isPresent()
+                ? ServiceBusConfigGenerator.EXTERNAL_BROKER_NAME
+                : ServiceBusConfigGenerator.brokerName(namespaceName);
+    }
+
+    /** Basic credentials for Jolokia: the external broker's, or the image defaults of floci-az's own. */
+    private String jolokiaAuth() {
+        EmulatorConfig.ServiceBusExternalBrokerConfig broker = externalBroker();
+        String credentials = broker.host().isPresent()
+                ? broker.user() + ":" + broker.password()
+                : "artemis:artemis";
+        return Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+    }
+
     private static byte[] loadArtemisExtension() {
         return loadResource(ARTEMIS_EXTENSION_RESOURCE);
     }
@@ -755,9 +828,8 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
             return;
         }
         String baseUrl = "http://" + state.jolokiaHost() + ":" + state.jolokiaPort() + "/console/jolokia";
-        String auth = Base64.getEncoder().encodeToString(
-                "artemis:artemis".getBytes(StandardCharsets.UTF_8));
-        String mbean = "org.apache.activemq.artemis:broker=\\\"floci-az-servicebus-" + namespaceName + "\\\"";
+        String auth = jolokiaAuth();
+        String mbean = "org.apache.activemq.artemis:broker=\\\"" + brokerName(namespaceName) + "\\\"";
         HttpClient http = HttpClient.newHttpClient();
         waitForJolokia(baseUrl, auth);
         try {
@@ -846,9 +918,9 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
     }
 
     private static Map<String, MessageCounts> jolokiaReadMessageCounts(
-            HttpClient http, String baseUrl, String auth, String namespaceName,
+            HttpClient http, String baseUrl, String auth, String brokerName,
             List<String> queueNames) throws IOException, InterruptedException {
-        String body = jolokiaMessageCountRequest(namespaceName, queueNames);
+        String body = jolokiaMessageCountRequest(brokerName, queueNames);
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl))
                 .timeout(MESSAGE_COUNT_TIMEOUT)
@@ -864,13 +936,13 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
     }
 
     static String jolokiaMessageCountRequest(
-            String namespaceName, List<String> queueNames) throws IOException {
+            String brokerName, List<String> queueNames) throws IOException {
         ArrayNode requests = MAPPER.createArrayNode();
         for (String queueName : queueNames) {
             for (String suffix : List.of("", DEAD_LETTER_QUEUE_SUFFIX)) {
                 ObjectNode request = requests.addObject();
                 request.put("type", "read");
-                request.put("mbean", queueMBean(namespaceName, queueName + suffix));
+                request.put("mbean", queueMBean(brokerName, queueName + suffix));
                 request.put("attribute", "MessageCount");
             }
         }
@@ -933,9 +1005,9 @@ public class ServiceBusNamespaceManager implements ServiceHealth {
         return Map.copyOf(counts);
     }
 
-    static String queueMBean(String namespaceName, String queueName) {
+    static String queueMBean(String brokerName, String queueName) {
         return "org.apache.activemq.artemis:broker="
-                + ObjectName.quote("floci-az-servicebus-" + namespaceName)
+                + ObjectName.quote(brokerName)
                 + ",component=addresses,address=" + ObjectName.quote(queueName)
                 + ",subcomponent=queues,routing-type=" + ObjectName.quote("anycast")
                 + ",queue=" + ObjectName.quote(queueName);

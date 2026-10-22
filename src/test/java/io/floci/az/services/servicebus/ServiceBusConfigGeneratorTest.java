@@ -109,6 +109,28 @@ class ServiceBusConfigGeneratorTest {
     }
 
     @Test
+    void externalBrokerServesPlainAmqpUnderAFixedNameWithTheSamePluginsAndCbsRouting() {
+        EmulatorConfig config = mock(EmulatorConfig.class);
+        EmulatorConfig.ServicesConfig services = mock(EmulatorConfig.ServicesConfig.class);
+        EmulatorConfig.ServiceBusConfig serviceBus = mock(EmulatorConfig.ServiceBusConfig.class);
+        when(config.services()).thenReturn(services);
+        when(services.serviceBus()).thenReturn(serviceBus);
+        when(serviceBus.maxDeliveryCount()).thenReturn(10);
+        ServiceBusConfigGenerator generator = new ServiceBusConfigGenerator(config);
+
+        String brokerXml = generator.generateExternal();
+        String namespaceBrokerXml = generator.generate("default");
+
+        // ServiceBusSessionSupport.isServiceBusBroker, in the patched AMQP jar, goes by this prefix.
+        assertTrue(brokerXml.contains("<name>floci-az-servicebus-external</name>"));
+        assertTrue(brokerXml.contains("<acceptor name=\"amqp\">"));
+        assertFalse(brokerXml.contains("<acceptor name=\"amqps\">"));
+        assertFalse(brokerXml.contains("keyStorePath"));
+        assertEquals(namespaceBrokerXml.substring(namespaceBrokerXml.indexOf("<broker-plugins>")),
+                brokerXml.substring(brokerXml.indexOf("<broker-plugins>")));
+    }
+
+    @Test
     void packagesMssbcbsFactoryForTheArtemisSidecar() throws Exception {
         URL extensionJar;
         try (InputStream stream = getClass().getResourceAsStream(

@@ -710,6 +710,44 @@ public interface EmulatorConfig {
 
         @WithDefault("60")
         long lockDurationSeconds();
+
+        /** An Artemis broker that floci-az does not start itself. */
+        ServiceBusExternalBrokerConfig externalBroker();
+    }
+
+    /**
+     * An Artemis broker that floci-az does not start, for environments without a Docker daemon,
+     * such as a Compose service or a Kubernetes pod. floci-az reaches it over AMQP for its CBS
+     * responder and over Jolokia for entities. It serves one namespace, since its addresses carry no
+     * namespace, and plain AMQP only: floci-az has no TLS material to give it.
+     */
+    interface ServiceBusExternalBrokerConfig {
+
+        /**
+         * Host of the broker. When set and {@code mocked} is false, a namespace starts on this
+         * broker and floci-az starts no Artemis container.
+         */
+        Optional<String> host();
+
+        @WithDefault("5672")
+        int amqpPort();
+
+        @WithDefault("8161")
+        int jolokiaPort();
+
+        /** The broker's web console user, which floci-az signs in to Jolokia as. */
+        @WithDefault("artemis")
+        String user();
+
+        @WithDefault("artemis")
+        String password();
+
+        /**
+         * When set, floci-az writes the files the broker needs into this directory at startup and
+         * exits instead of serving: {@code etc/broker.xml} and {@code etc/management.xml}, its
+         * extension jar and the Artemis AMQP and Proton-J jars it patches under {@code lib/}.
+         */
+        Optional<String> exportDir();
     }
 
     interface EventHubConfig {

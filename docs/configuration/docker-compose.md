@@ -150,6 +150,9 @@ services:
 Once the sidecars start, their ports are available on the host: `localhost:27017` (MongoDB),
 `localhost:5432` (PostgreSQL), `localhost:5672` (AMQP / Artemis).
 
+Service Bus can instead run on an Artemis broker that is a Compose service of its own, with no
+Docker socket: see [Service Bus: External broker](../services/service-bus.md#external-broker).
+
 ### Sidecars and Docker networks
 
 Docker Compose puts its services on a user-defined network, where containers resolve each other by name. A plain `docker run` without `--network` puts floci-az on Docker's default `bridge` network instead, which does not resolve container names. floci-az still reaches its sidecars there by container IP, so Redis caches, container registries and database servers finish provisioning, but the host names it reports for Redis, PostgreSQL, MySQL, MariaDB and SQL Server are container names that clients on the default bridge cannot resolve. floci-az logs a warning at startup in that case. Use a user-defined network:
