@@ -1,9 +1,11 @@
 package org.apache.activemq.artemis.protocol.amqp.proton;
 
 import io.netty.buffer.ByteBuf;
+import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPLargeMessage;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPMessage;
 import org.apache.activemq.artemis.protocol.amqp.util.TLSEncode;
+import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.Proton;
 import org.apache.qpid.proton.amqp.Symbol;
 import org.apache.qpid.proton.amqp.UnsignedInteger;
@@ -11,12 +13,15 @@ import org.apache.qpid.proton.amqp.messaging.ApplicationProperties;
 import org.apache.qpid.proton.amqp.messaging.Header;
 import org.apache.qpid.proton.amqp.messaging.MessageAnnotations;
 import org.apache.qpid.proton.amqp.messaging.Properties;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.lang.reflect.Method;
 import java.net.URLClassLoader;
 import java.util.Date;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -69,6 +74,27 @@ class ServiceBusLargeMessageSupportTest {
         assertEquals(new Date(60_000), properties.getAbsoluteExpiryTime());
         verify(source, never()).getBody();
         verify(source, never()).getMessageAnnotations();
+    }
+
+    @Test
+    void copyKeepsOnlyTheDeliveryCountKeptForADeadLetter() throws Exception {
+        SimpleString priorDeliveryCount = SimpleString.of("floci_prior_delivery_count");
+        AMQPLargeMessage source = mock(AMQPLargeMessage.class, CALLS_REAL_METHODS);
+        TypedProperties extraProperties = new TypedProperties();
+        extraProperties.putIntProperty(priorDeliveryCount, 10);
+        extraProperties.putSimpleStringProperty(SimpleString.of("_AMQ_ORIG_QUEUE"), SimpleString.of("orders"));
+
+        try (URLClassLoader loader = PatchJarLoader.open()) {
+            Method extraPropertiesForCopy = Class.forName(
+                    "org.apache.activemq.artemis.protocol.amqp.broker.ServiceBusLargeMessageSupport", true, loader)
+                    .getMethod("extraPropertiesForCopy", AMQPLargeMessage.class);
+            assertNull(extraPropertiesForCopy.invoke(null, source));
+
+            setField(source, "extraProperties", extraProperties);
+            TypedProperties kept = (TypedProperties) extraPropertiesForCopy.invoke(null, source);
+            assertEquals(Set.of(priorDeliveryCount), kept.getPropertyNames());
+            assertEquals(10, kept.getProperty(priorDeliveryCount));
+        }
     }
 
     private static void setField(AMQPLargeMessage message, String name, Object value) throws Exception {

@@ -18,8 +18,30 @@ public final class ServiceBusMessageMetadataSupport {
    private static final Symbol ENQUEUED_TIME = Symbol.valueOf("x-opt-enqueued-time");
    private static final SimpleString PEEK_LOCK_PREFIX = SimpleString.of("floci-az:servicebus-peeklock:");
    private static final SimpleString SESSION_PREFIX = SimpleString.of("floci-az:servicebus-session:");
+   /**
+    * The deliveries a message had before it was dead-lettered. Artemis dead-letters a copy, whose
+    * reference counts from zero, where Azure keeps counting. A broker property: clients never see it.
+    */
+   public static final SimpleString PRIOR_DELIVERY_COUNT = SimpleString.of("floci_prior_delivery_count");
 
    private ServiceBusMessageMetadataSupport() {
+   }
+
+   /** The deliveries Azure counts for the message: on its queue, and before it was dead-lettered. */
+   public static int deliveryCount(MessageReference reference) {
+      int deliveries = reference.getDeliveryCount();
+      if (reference.getMessage() instanceof AMQPMessage message && message.getExtraProperties() != null
+         && message.getExtraProperties().getProperty(PRIOR_DELIVERY_COUNT) instanceof Integer prior) {
+         return prior + deliveries;
+      }
+      return deliveries;
+   }
+
+   /** Keeps the delivery count Azure gives a message Artemis is about to dead-letter. */
+   static void keepDeliveryCount(MessageReference reference, int deliveryCount) {
+      if (reference.getMessage() instanceof AMQPMessage message) {
+         message.createExtraProperties().putIntProperty(PRIOR_DELIVERY_COUNT, deliveryCount);
+      }
    }
 
    public static boolean isServiceBus(MessageReference reference) {
@@ -59,7 +81,7 @@ public final class ServiceBusMessageMetadataSupport {
          return original;
       }
       Header header = original == null ? new Header() : new Header(original);
-      header.setDeliveryCount(UnsignedInteger.valueOf(Math.max(0, reference.getDeliveryCount() - 1)));
+      header.setDeliveryCount(UnsignedInteger.valueOf(Math.max(0, deliveryCount(reference) - 1)));
       return header;
    }
 

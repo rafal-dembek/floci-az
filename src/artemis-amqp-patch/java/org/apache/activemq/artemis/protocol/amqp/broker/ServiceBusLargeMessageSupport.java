@@ -4,8 +4,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.protocol.amqp.proton.ServiceBusMessageMetadataSupport;
 import org.apache.activemq.artemis.protocol.amqp.util.NettyWritable;
 import org.apache.activemq.artemis.protocol.amqp.util.TLSEncode;
+import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.amqp.messaging.ApplicationProperties;
 import org.apache.qpid.proton.amqp.messaging.Header;
 import org.apache.qpid.proton.amqp.messaging.MessageAnnotations;
@@ -16,6 +19,22 @@ import org.apache.qpid.proton.codec.WritableBuffer;
 /** Preserves in-memory broker metadata when routing or dead-lettering a streamed message. */
 public final class ServiceBusLargeMessageSupport {
    private ServiceBusLargeMessageSupport() {
+   }
+
+   /**
+    * The broker properties a copy keeps: the delivery count kept for a dead-lettered message. A standard
+    * message's copy keeps every broker property, a large message's none.
+    */
+   public static TypedProperties extraPropertiesForCopy(AMQPLargeMessage message) {
+      SimpleString key = ServiceBusMessageMetadataSupport.PRIOR_DELIVERY_COUNT;
+      TypedProperties extra = message.getExtraProperties();
+      Object priorDeliveryCount = extra == null ? null : extra.getProperty(key);
+      if (priorDeliveryCount == null) {
+         return null;
+      }
+      TypedProperties kept = new TypedProperties();
+      kept.putProperty(key, priorDeliveryCount);
+      return kept;
    }
 
    public static ByteBuf headerForCopy(AMQPLargeMessage message, AtomicInteger bodyPosition, boolean deadLetterOrExpiry) {

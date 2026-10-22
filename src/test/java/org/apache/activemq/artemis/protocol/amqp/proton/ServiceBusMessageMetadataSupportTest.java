@@ -4,6 +4,7 @@ import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPMessage;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPStandardMessage;
+import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.Proton;
 import org.apache.qpid.proton.amqp.Symbol;
 import org.apache.qpid.proton.amqp.UnsignedInteger;
@@ -51,6 +52,23 @@ class ServiceBusMessageMetadataSupportTest {
                     assertNull(input.getDeliveryCount());
                 }
             }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"peeklock", "session"})
+    void deadLetteredMessageCountsTheDeliveriesBeforeItWasDeadLettered(String kind) throws Exception {
+        try (Fixture fixture = new Fixture(kind)) {
+            TypedProperties extraProperties = new TypedProperties();
+            extraProperties.putIntProperty(SimpleString.of("floci_prior_delivery_count"), 10);
+            when(fixture.reference.getMessage()).thenReturn(fixture.message);
+            when(fixture.message.getExtraProperties()).thenReturn(extraProperties);
+            when(fixture.reference.getDeliveryCount()).thenReturn(1);
+
+            assertEquals(11, fixture.type.getMethod("deliveryCount", MessageReference.class)
+                    .invoke(null, fixture.reference));
+            // The header counts the deliveries before this one: the ten before it was dead-lettered.
+            assertEquals(UnsignedInteger.valueOf(10), fixture.header(null).getDeliveryCount());
         }
     }
 
