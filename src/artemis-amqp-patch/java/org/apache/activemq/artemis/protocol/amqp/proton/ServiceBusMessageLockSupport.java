@@ -152,6 +152,7 @@ public final class ServiceBusMessageLockSupport {
          // Retain the AMQP delivery until the peer settles it, so a late disposition gets
          // MessageLockLost instead of falling back to an unsupported management request.
          delivery.setContext(EXPIRED);
+         ServiceBusDeadLetterSupport.beforeFailedDelivery(connection.getProtocolManager().getServer(), lock.reference);
          session.cancel(lock.consumer, lock.reference.getMessage(), true);
       } catch (Exception e) {
          LOGGER.error("Could not release an expired Service Bus message lock", e);

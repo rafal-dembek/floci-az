@@ -1,13 +1,16 @@
 package org.apache.activemq.artemis.protocol.amqp.proton;
 
+import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.ServerConsumer;
+import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPSessionCallback;
 import org.apache.qpid.proton.amqp.messaging.Accepted;
 import org.apache.qpid.proton.amqp.messaging.Rejected;
 import org.apache.qpid.proton.engine.Delivery;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import java.net.URLClassLoader;
 import java.util.concurrent.ScheduledFuture;
@@ -84,6 +87,26 @@ class ServiceBusMessageLockSupportTest {
             verify(fixture.delivery).disposition(argThat(state -> state instanceof Rejected rejected
                     && "com.microsoft:message-lock-lost".equals(rejected.getError().getCondition().toString())));
             verify(fixture.delivery).settle();
+        }
+    }
+
+    @Test
+    void expiryThatReachesMaxDeliveryCountGivesAzuresReasonBeforeReleasingTheMessage() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            Message message = fixture.reference.getMessage();
+            when(fixture.reference.getQueue().getUser()).thenReturn(SimpleString.of("floci-az:servicebus-peeklock:60"));
+            when(fixture.reference.getQueue().getAddress()).thenReturn(SimpleString.of("orders"));
+            when(fixture.reference.getDeliveryCount()).thenReturn(10);
+            when(fixture.connection.getProtocolManager().getServer().getAddressSettingsRepository().getMatch("orders"))
+                    .thenReturn(new AddressSettings().setMaxDeliveryAttempts(10));
+            fixture.track(false);
+            fixture.expiry.get().run();
+
+            InOrder order = inOrder(message, fixture.session);
+            order.verify(message).putStringProperty("DeadLetterReason", "MaxDeliveryCountExceeded");
+            order.verify(message).putStringProperty("DeadLetterErrorDescription",
+                    "Message could not be consumed after 10 delivery attempts.");
+            order.verify(fixture.session).cancel(fixture.consumer, message, true);
         }
     }
 

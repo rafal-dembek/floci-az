@@ -395,7 +395,14 @@
                                 <replace
                                     file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/proton/ProtonServerSenderContext.java"
                                     token="sessionSPI.reject(brokerConsumer, message);"
-                                    value="ServiceBusDeadLetterSupport.apply(message, (Rejected) remoteState); sessionSPI.reject(brokerConsumer, message);"
+                                    value="ServiceBusDeadLetterSupport.apply((MessageReference) delivery.getContext(), (Rejected) remoteState); sessionSPI.reject(brokerConsumer, message);"
+                                    failOnNoReplacements="true" />
+                                <!-- A failed delivery that reaches MaxDeliveryCount is dead-lettered by
+                                     Artemis, which gives no reason; Azure gives MaxDeliveryCountExceeded. -->
+                                <replace
+                                    file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/proton/ProtonServerSenderContext.java"
+                                    token="sessionSPI.cancel(brokerConsumer, message, true);"
+                                    value="ServiceBusDeadLetterSupport.beforeFailedDelivery(sessionSPI.getProtocolManager().getServer(), (MessageReference) delivery.getContext()); sessionSPI.cancel(brokerConsumer, message, true);"
                                     failOnNoReplacements="true" />
                                 <!-- Broker ingress timestamps and dead-letter properties can be newer than
                                      the large-message file. Copy the current metadata before streaming its body. -->
@@ -408,6 +415,11 @@
                                     file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/broker/AMQPLargeMessage.java"
                                     token="bufferNewHeader = newHeaderWithoutExpiry(place);"
                                     value="bufferNewHeader = getIngressTimestamp() == null ? newHeaderWithoutExpiry(place) : ServiceBusLargeMessageSupport.headerForCopy(this, place, isDLQOrExpiry);"
+                                    failOnNoReplacements="true" />
+                                <replace
+                                    file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/broker/AMQPLargeMessage.java"
+                                    token="AMQPLargeMessage copy = new AMQPLargeMessage(newID, messageFormat, null, coreMessageObjectPools, storageManager);"
+                                    value="AMQPLargeMessage copy = new AMQPLargeMessage(newID, messageFormat, ServiceBusLargeMessageSupport.extraPropertiesForCopy(this), coreMessageObjectPools, storageManager);"
                                     failOnNoReplacements="true" />
                                 <replace
                                     file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/proton/ProtonServerSenderContext.java"
@@ -437,7 +449,7 @@
                                 <replace
                                     file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/proton/AMQPMessageWriter.java"
                                     token="final ReadableBuffer sendBuffer = amqpMessage.getSendBuffer(messageReference.getDeliveryCount(), messageReference);"
-                                    value="final ReadableBuffer sendBuffer = ServiceBusMessageMetadataSupport.forDelivery(amqpMessage, messageReference).getSendBuffer(messageReference.getDeliveryCount(), messageReference);"
+                                    value="final ReadableBuffer sendBuffer = ServiceBusMessageMetadataSupport.forDelivery(amqpMessage, messageReference).getSendBuffer(ServiceBusMessageMetadataSupport.deliveryCount(messageReference), messageReference);"
                                     failOnNoReplacements="true" />
                                 <replace
                                     file="${project.build.directory}/artemis-amqp-patch-sources/org/apache/activemq/artemis/protocol/amqp/proton/AMQPLargeMessageWriter.java"

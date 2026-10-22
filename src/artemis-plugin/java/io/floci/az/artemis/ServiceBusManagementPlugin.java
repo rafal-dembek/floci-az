@@ -10,6 +10,7 @@ import org.apache.activemq.artemis.core.server.plugin.ActiveMQServerPlugin;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPMessage;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPStandardMessage;
 import org.apache.activemq.artemis.utils.collections.LinkedListIterator;
+import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.Proton;
 import org.apache.qpid.proton.amqp.Binary;
 import org.apache.qpid.proton.amqp.Symbol;
@@ -58,6 +59,12 @@ public final class ServiceBusManagementPlugin implements ActiveMQServerPlugin {
      */
     private static final String CONNECTION_ID_PROPERTY = "floci_connection_id";
     private static final SimpleString CONNECTION_ID = SimpleString.of(CONNECTION_ID_PROPERTY);
+    /**
+     * The deliveries a message had before it was dead-lettered, kept as a broker property by the
+     * AMQP layer. The name is duplicated from {@code ServiceBusMessageMetadataSupport}, which is
+     * built into the AMQP protocol jar.
+     */
+    private static final SimpleString PRIOR_DELIVERY_COUNT = SimpleString.of("floci_prior_delivery_count");
     private static final int MAX_MESSAGE_COUNT = 250;
     private static final int MAX_RESPONSE_PAYLOAD_BYTES = 1_048_576;
     private static final Symbol SEQUENCE_NUMBER = Symbol.valueOf("x-opt-sequence-number");
@@ -244,8 +251,15 @@ public final class ServiceBusManagementPlugin implements ActiveMQServerPlugin {
     private static Header peekHeader(AMQPMessage source, MessageReference reference) {
         Header sourceHeader = source.getHeader();
         Header header = sourceHeader == null ? new Header() : new Header(sourceHeader);
-        header.setDeliveryCount(UnsignedInteger.valueOf(reference.getDeliveryCount()));
+        header.setDeliveryCount(UnsignedInteger.valueOf(
+                priorDeliveryCount(source) + reference.getDeliveryCount()));
         return header;
+    }
+
+    private static int priorDeliveryCount(AMQPMessage source) {
+        TypedProperties extraProperties = source.getExtraProperties();
+        return extraProperties != null
+                && extraProperties.getProperty(PRIOR_DELIVERY_COUNT) instanceof Integer prior ? prior : 0;
     }
 
     private static long enqueuedTime(AMQPMessage source) {

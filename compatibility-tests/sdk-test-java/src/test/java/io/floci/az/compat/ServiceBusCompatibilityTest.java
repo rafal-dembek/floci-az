@@ -5,6 +5,7 @@ import com.azure.messaging.servicebus.ServiceBusReceivedMessage;
 import com.azure.messaging.servicebus.ServiceBusReceiverClient;
 import com.azure.messaging.servicebus.ServiceBusSenderClient;
 import com.azure.messaging.servicebus.ServiceBusSessionReceiverClient;
+import com.azure.messaging.servicebus.models.DeadLetterOptions;
 import com.azure.messaging.servicebus.models.ServiceBusReceiveMode;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.function.Executable;
@@ -217,6 +218,47 @@ class ServiceBusCompatibilityTest {
                     .stream().findFirst().orElse(null);
             assertNotNull(dlqMsg, "Message should be dead-lettered after exceeding MaxDeliveryCount");
             assertEquals(payload, dlqMsg.getBody().toString());
+            assertEquals("MaxDeliveryCountExceeded", dlqMsg.getDeadLetterReason());
+            assertEquals("Message could not be consumed after 2 delivery attempts.",
+                    dlqMsg.getDeadLetterErrorDescription());
+            // The zero-based header of a receive counts the deliveries before it: a dead letter
+            // keeps the two that failed.
+            assertEquals(2, dlqMsg.getDeliveryCount());
+            dlqReceiver.complete(dlqMsg);
+        }
+    }
+
+    @Test
+    @DisplayName("explicit dead-letter keeps the client's reason and the deliveries that failed")
+    void explicitDeadLetterKeepsReasonAndFailedDeliveries() throws Exception {
+        String queue = uniqueQueue();
+        String payload = "dlq-reason-" + UUID.randomUUID();
+
+        send(queue, payload);
+
+        try (ServiceBusReceiverClient receiver = peekLockReceiver(queue)) {
+            receiver.abandon(receiver.receiveMessages(1, RECV_TIMEOUT).stream().findFirst().orElseThrow());
+            ServiceBusReceivedMessage msg = receiver.receiveMessages(1, RECV_TIMEOUT)
+                    .stream().findFirst().orElseThrow();
+            receiver.deadLetter(msg, new DeadLetterOptions()
+                    .setDeadLetterReason("poison")
+                    .setDeadLetterErrorDescription("unreadable"));
+        }
+
+        try (ServiceBusReceiverClient dlqReceiver = EmulatorConfig.serviceBusClientBuilder()
+                .receiver()
+                .queueName(queue)
+                .subQueue(com.azure.messaging.servicebus.models.SubQueue.DEAD_LETTER_QUEUE)
+                .receiveMode(ServiceBusReceiveMode.PEEK_LOCK)
+                .buildClient()) {
+            ServiceBusReceivedMessage dlqMsg = dlqReceiver.receiveMessages(1, RECV_TIMEOUT)
+                    .stream().findFirst().orElse(null);
+            assertNotNull(dlqMsg, "Message should be in DLQ");
+            assertEquals(payload, dlqMsg.getBody().toString());
+            assertEquals("poison", dlqMsg.getDeadLetterReason());
+            assertEquals("unreadable", dlqMsg.getDeadLetterErrorDescription());
+            // Azure counts the abandoned delivery, not the one that dead-lettered the message.
+            assertEquals(1, dlqMsg.getDeliveryCount());
             dlqReceiver.complete(dlqMsg);
         }
     }
